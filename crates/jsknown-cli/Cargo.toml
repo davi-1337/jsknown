@@ -1,0 +1,18 @@
+[package]
+name = "jsknown-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "jsknown"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+jsknown-core = { path = "../jsknown-core" }
+jsknown-server = { path = "../jsknown-server" }
+tokio.workspace = true
+tracing-subscriber.workspace = true
