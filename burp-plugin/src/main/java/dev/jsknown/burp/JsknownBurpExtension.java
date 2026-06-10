@@ -23,6 +23,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -63,12 +64,18 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
 
         HttpResponse response = responseReceived;
         String contentType = response.headerValue("Content-Type");
-        if (!isInteresting(url, contentType, response.bodyToString())) {
+        byte[] bodyBytes = response.body().getBytes();
+        String bodyText = response.bodyToString();
+        if ((bodyText == null || bodyText.isEmpty()) && bodyBytes.length > 0) {
+            bodyText = new String(bodyBytes, StandardCharsets.UTF_8);
+        }
+
+        if (!isInteresting(url, contentType, bodyText)) {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
 
         try {
-            postIngest(capturedRequest, response);
+            postIngest(capturedRequest, response, bodyText, bodyBytes);
         } catch (Exception error) {
             api.logging().logToError("jsknown ingest failed: " + error.getMessage());
         }
@@ -105,8 +112,8 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
         }
     }
 
-    private void postIngest(HttpRequest capturedRequest, HttpResponse response) throws IOException, InterruptedException {
-        String json = JsonPayload.from(capturedRequest, response);
+    private void postIngest(HttpRequest capturedRequest, HttpResponse response, String bodyText, byte[] bodyBytes) throws IOException, InterruptedException {
+        String json = JsonPayload.from(capturedRequest, response, bodyText, bodyBytes);
         java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
             .uri(URI.create(serverUrl.getText() + "/ingest"))
             .timeout(Duration.ofSeconds(5))
@@ -129,7 +136,7 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
     }
 
     private static final class JsonPayload {
-        static String from(HttpRequest capturedRequest, HttpResponse response) {
+        static String from(HttpRequest capturedRequest, HttpResponse response, String bodyText, byte[] bodyBytes) {
             Map<String, String> requestHeaders = new LinkedHashMap<>();
             capturedRequest.headers().forEach(header -> requestHeaders.put(header.name(), header.value()));
             Map<String, String> responseHeaders = new LinkedHashMap<>();
@@ -144,7 +151,8 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
                 + "\"response\":{"
                 + "\"status\":" + response.statusCode() + ","
                 + "\"headers\":" + map(responseHeaders) + ","
-                + "\"body\":" + quote(response.bodyToString())
+                + "\"body\":" + quote(bodyText == null ? "" : bodyText) + ","
+                + "\"body_base64\":" + quote(Base64.getEncoder().encodeToString(bodyBytes))
                 + "}"
                 + "}";
         }

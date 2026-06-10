@@ -13,44 +13,193 @@ pub fn beautify(kind: AssetKind, content: &str) -> String {
 fn beautify_html(content: &str) -> String {
     let mut out = String::new();
     let mut indent = 0usize;
-    let mut token = String::new();
-    let mut in_tag = false;
+    let mut i = 0usize;
+    let bytes = content.as_bytes();
 
-    for ch in content.chars() {
-        token.push(ch);
-        if ch == '<' {
-            in_tag = true;
+    while i < content.len() {
+        if bytes[i] != b'<' {
+            let next = content[i..]
+                .find('<')
+                .map(|offset| i + offset)
+                .unwrap_or(content.len());
+            emit_text(&mut out, indent, &content[i..next]);
+            i = next;
+            continue;
         }
-        if in_tag && ch == '>' {
-            let trimmed = token.trim();
-            if trimmed.starts_with("</") {
-                indent = indent.saturating_sub(1);
+
+        if content[i..].starts_with("<!--") {
+            let end = content[i..]
+                .find("-->")
+                .map(|offset| i + offset + 3)
+                .unwrap_or(content.len());
+            emit_line(&mut out, indent, content[i..end].trim());
+            i = end;
+            continue;
+        }
+
+        let Some(tag_end) = find_tag_end(content, i) else {
+            emit_text(&mut out, indent, &content[i..]);
+            break;
+        };
+
+        let tag = content[i..=tag_end].trim();
+        let tag_name = html_tag_name(tag);
+        let is_closing = tag.starts_with("</");
+        let is_void = tag.ends_with("/>") || tag_name.as_deref().is_some_and(is_void_html_tag);
+
+        if is_closing {
+            indent = indent.saturating_sub(1);
+        }
+
+        emit_line(&mut out, indent, tag);
+        i = tag_end + 1;
+
+        if matches!(tag_name.as_deref(), Some("script" | "style")) && !is_closing {
+            let close = format!("</{}>", tag_name.as_deref().unwrap());
+            let lower_tail = content[i..].to_ascii_lowercase();
+            if let Some(close_offset) = lower_tail.find(&close) {
+                let raw_body = &content[i..i + close_offset];
+                let body = if tag_name.as_deref() == Some("script") {
+                    beautify_javascript(raw_body)
+                } else {
+                    beautify_css_like(raw_body)
+                };
+                for line in body.lines().filter(|line| !line.trim().is_empty()) {
+                    emit_line(&mut out, indent + 1, line.trim_end());
+                }
+                emit_line(
+                    &mut out,
+                    indent,
+                    &content[i + close_offset..i + close_offset + close.len()],
+                );
+                i += close_offset + close.len();
+                continue;
             }
-            if !trimmed.is_empty() {
-                out.push_str(&"  ".repeat(indent));
-                out.push_str(trimmed);
-                out.push('\n');
-            }
-            if trimmed.starts_with('<')
-                && !trimmed.starts_with("</")
-                && !trimmed.ends_with("/>")
-                && !trimmed.starts_with("<!")
-                && !trimmed.to_ascii_lowercase().starts_with("<meta")
-                && !trimmed.to_ascii_lowercase().starts_with("<link")
-                && !trimmed.to_ascii_lowercase().starts_with("<br")
-            {
-                indent += 1;
-            }
-            token.clear();
-            in_tag = false;
+        }
+
+        if !is_closing && !is_void && !tag.starts_with("<!") {
+            indent += 1;
         }
     }
 
-    let tail = token.trim();
-    if !tail.is_empty() {
-        out.push_str(&"  ".repeat(indent));
-        out.push_str(tail);
+    collapse_blank_lines(&out)
+}
+
+fn find_tag_end(content: &str, start: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    let bytes = content.as_bytes();
+    let mut i = start;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+        } else if matches!(b, b'"' | b'\'') {
+            quote = Some(b);
+        } else if b == b'>' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn html_tag_name(tag: &str) -> Option<String> {
+    let tag = tag
+        .trim_start_matches('<')
+        .trim_start_matches('/')
+        .trim_start_matches('!')
+        .trim();
+    let name: String = tag
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect();
+    (!name.is_empty()).then(|| name.to_ascii_lowercase())
+}
+
+fn is_void_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+fn emit_text(out: &mut String, indent: usize, text: &str) {
+    for line in text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+    {
+        emit_line(out, indent, line.trim());
+    }
+}
+
+fn emit_line(out: &mut String, indent: usize, line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+    out.push_str(&"  ".repeat(indent));
+    out.push_str(line.trim());
+    out.push('\n');
+}
+
+fn collapse_blank_lines(content: &str) -> String {
+    let mut out = String::new();
+    let mut previous_blank = false;
+    for line in content.lines() {
+        let blank = line.trim().is_empty();
+        if blank && previous_blank {
+            continue;
+        }
+        previous_blank = blank;
+        out.push_str(line);
         out.push('\n');
+    }
+    out
+}
+
+fn beautify_css_like(content: &str) -> String {
+    let mut out = String::new();
+    let mut indent = 0usize;
+    for ch in content.chars() {
+        match ch {
+            '{' => {
+                out.push_str(" {\n");
+                indent += 1;
+                out.push_str(&"  ".repeat(indent));
+            }
+            '}' => {
+                indent = indent.saturating_sub(1);
+                trim_trailing_space(&mut out);
+                out.push('\n');
+                out.push_str(&"  ".repeat(indent));
+                out.push('}');
+                out.push('\n');
+                out.push_str(&"  ".repeat(indent));
+            }
+            ';' => {
+                out.push(';');
+                out.push('\n');
+                out.push_str(&"  ".repeat(indent));
+            }
+            _ => out.push(ch),
+        }
     }
     out
 }
@@ -81,8 +230,18 @@ enum Tok {
 
 /// Keywords after which a `/` starts a regex rather than a division operator.
 const REGEX_STARTERS: &[&str] = &[
-    "return", "typeof", "instanceof", "void", "delete", "throw", "new", "in", "of", "case",
-    "yield", "await",
+    "return",
+    "typeof",
+    "instanceof",
+    "void",
+    "delete",
+    "throw",
+    "new",
+    "in",
+    "of",
+    "case",
+    "yield",
+    "await",
 ];
 
 fn tokenize(content: &str) -> Vec<Tok> {
@@ -227,7 +386,12 @@ fn tokenize(content: &str) -> Vec<Tok> {
             let two: String = chars[i..len.min(i + 2)].iter().collect();
             let three: String = chars[i..len.min(i + 3)].iter().collect();
 
-            if three == "**=" || three == "&&=" || three == "||=" || three == "??=" || three == "..." {
+            if three == "**="
+                || three == "&&="
+                || three == "||="
+                || three == "??="
+                || three == "..."
+            {
                 tokens.push(Tok::Op(three));
                 i += 3;
                 can_regex = true;
@@ -235,8 +399,25 @@ fn tokenize(content: &str) -> Vec<Tok> {
             }
             if matches!(
                 two.as_str(),
-                "=>" | "===" | "!==" | ">=" | "<=" | "**" | "&&" | "||" | "??" | "++" | "--"
-                    | "+=" | "-=" | "*=" | "/=" | "%=" | "==" | "!=" | "<<" | ">>"
+                "=>" | "==="
+                    | "!=="
+                    | ">="
+                    | "<="
+                    | "**"
+                    | "&&"
+                    | "||"
+                    | "??"
+                    | "++"
+                    | "--"
+                    | "+="
+                    | "-="
+                    | "*="
+                    | "/="
+                    | "%="
+                    | "=="
+                    | "!="
+                    | "<<"
+                    | ">>"
             ) {
                 let is_value = matches!(two.as_str(), "++" | "--");
                 tokens.push(Tok::Op(two));
@@ -250,6 +431,16 @@ fn tokenize(content: &str) -> Vec<Tok> {
         if matches!(ch, '{' | '}' | '[' | ']' | '(' | ')' | ';' | ',') {
             tokens.push(Tok::Punct(ch));
             can_regex = matches!(ch, '{' | '[' | '(' | ',' | ';');
+            i += 1;
+            continue;
+        }
+
+        if matches!(
+            ch,
+            '=' | '+' | '-' | '*' | '/' | '%' | '<' | '>' | '!' | '&' | '|' | '^' | '~' | '?' | ':'
+        ) {
+            tokens.push(Tok::Op(ch.to_string()));
+            can_regex = !matches!(ch, '?' | ':');
             i += 1;
             continue;
         }
@@ -270,9 +461,25 @@ fn tokenize(content: &str) -> Vec<Tok> {
             let is_keyword = REGEX_STARTERS.contains(&word.as_str())
                 || matches!(
                     word.as_str(),
-                    "if" | "else" | "for" | "while" | "do" | "switch" | "try" | "catch"
-                        | "finally" | "class" | "function" | "async" | "const" | "let" | "var"
-                        | "import" | "export" | "default" | "extends" | "static"
+                    "if" | "else"
+                        | "for"
+                        | "while"
+                        | "do"
+                        | "switch"
+                        | "try"
+                        | "catch"
+                        | "finally"
+                        | "class"
+                        | "function"
+                        | "async"
+                        | "const"
+                        | "let"
+                        | "var"
+                        | "import"
+                        | "export"
+                        | "default"
+                        | "extends"
+                        | "static"
                 );
             can_regex = REGEX_STARTERS.contains(&word.as_str())
                 || matches!(word.as_str(), "else" | "do" | "finally");
@@ -285,8 +492,21 @@ fn tokenize(content: &str) -> Vec<Tok> {
         tokens.push(Tok::Punct(ch));
         can_regex = matches!(
             ch,
-            '=' | '!' | '<' | '>' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '~' | '?'
-                | ':' | '.'
+            '=' | '!'
+                | '<'
+                | '>'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '%'
+                | '&'
+                | '|'
+                | '^'
+                | '~'
+                | '?'
+                | ':'
+                | '.'
         );
         i += 1;
     }
@@ -296,9 +516,37 @@ fn tokenize(content: &str) -> Vec<Tok> {
 
 /// Keywords that should have a space after them when followed by `(` or `{`.
 const SPACE_AFTER_KW: &[&str] = &[
-    "if", "else", "for", "while", "do", "switch", "try", "catch", "finally", "return", "typeof",
-    "instanceof", "void", "delete", "throw", "new", "in", "of", "case", "yield", "await",
-    "class", "function", "async", "const", "let", "var", "import", "export", "extends", "static",
+    "if",
+    "else",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "try",
+    "catch",
+    "finally",
+    "return",
+    "typeof",
+    "instanceof",
+    "void",
+    "delete",
+    "throw",
+    "new",
+    "in",
+    "of",
+    "case",
+    "yield",
+    "await",
+    "class",
+    "function",
+    "async",
+    "const",
+    "let",
+    "var",
+    "import",
+    "export",
+    "extends",
+    "static",
     "default",
 ];
 
@@ -339,26 +587,27 @@ fn print_tokens(tokens: &[Tok]) -> String {
             Tok::Word(w) => {
                 out.push_str(w);
                 // Add space after keywords when the next non-trivial token warrants it
-                if SPACE_AFTER_KW.contains(&w.as_str()) {
-                    if !matches!(next, Some(Tok::Punct(';')) | Some(Tok::Punct(',')) | None) {
-                        out.push(' ');
-                    }
+                if SPACE_AFTER_KW.contains(&w.as_str())
+                    && !matches!(next, Some(Tok::Punct(';')) | Some(Tok::Punct(',')) | None)
+                {
+                    out.push(' ');
                 }
             }
 
-            Tok::Op(op) => {
-                match op.as_str() {
-                    "++" | "--" => out.push_str(op),
-                    "=>" => {
-                        out.push_str(" => ");
-                    }
-                    _ => {
-                        out.push(' ');
-                        out.push_str(op);
-                        out.push(' ');
-                    }
+            Tok::Op(op) => match op.as_str() {
+                "++" | "--" | "!" | "~" => out.push_str(op),
+                ":" => {
+                    trim_trailing_space(&mut out);
+                    out.push_str(": ");
                 }
-            }
+                "?" => out.push_str(" ? "),
+                "." => out.push('.'),
+                _ => {
+                    ensure_single_space(&mut out);
+                    out.push_str(op);
+                    out.push(' ');
+                }
+            },
 
             Tok::Punct(ch) => match ch {
                 '{' | '[' => {
@@ -422,6 +671,18 @@ fn print_tokens(tokens: &[Tok]) -> String {
     out
 }
 
+fn ensure_single_space(out: &mut String) {
+    if !out.ends_with(' ') && !out.ends_with('\n') && !out.is_empty() {
+        out.push(' ');
+    }
+}
+
+fn trim_trailing_space(out: &mut String) {
+    while out.ends_with(' ') {
+        out.pop();
+    }
+}
+
 fn beautify_javascript(content: &str) -> String {
     let tokens = tokenize(content);
     print_tokens(&tokens)
@@ -458,5 +719,26 @@ mod tests {
         let src = "var re=/[a-z]+/gi;";
         let out = beautify(AssetKind::JavaScript, src);
         assert!(out.contains("/[a-z]+/gi"), "got: {out}");
+    }
+
+    #[test]
+    fn spaces_common_operators() {
+        let out = beautify(AssetKind::JavaScript, "const x=a?b:c;obj.y=x+1;");
+        assert!(
+            out.contains("const x = a ? b: c;") || out.contains("const x = a ? b : c;"),
+            "got: {out}"
+        );
+        assert!(out.contains("x + 1"), "got: {out}");
+    }
+
+    #[test]
+    fn formats_script_inside_html() {
+        let out = beautify(
+            AssetKind::Html,
+            "<html><body><script>function f(){return 1;}</script></body></html>",
+        );
+        assert!(out.contains("<script>"), "got: {out}");
+        assert!(out.contains("function f()"), "got: {out}");
+        assert!(out.contains("  <body>"), "got: {out}");
     }
 }

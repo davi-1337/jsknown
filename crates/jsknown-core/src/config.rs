@@ -11,6 +11,7 @@ pub struct Config {
     pub rate_per_minute: u32,
     pub fetch_concurrency: usize,
     pub max_body_bytes: usize,
+    pub debug: bool,
 }
 
 impl Default for Config {
@@ -25,6 +26,7 @@ impl Default for Config {
             rate_per_minute: 0,
             fetch_concurrency: 5,
             max_body_bytes: 25_000_000,
+            debug: false,
         }
     }
 }

@@ -1,3 +1,5 @@
+use anyhow::Result;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -14,13 +16,26 @@ pub struct HttpResponseInfo {
     pub status: u16,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub body_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestionRequest {
     pub request: HttpRequestInfo,
     pub response: HttpResponseInfo,
+}
+
+impl HttpResponseInfo {
+    pub fn decoded_body(&self) -> Result<String> {
+        let Some(encoded) = self.body_base64.as_deref().filter(|value| !value.is_empty()) else {
+            return Ok(self.body.clone());
+        };
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]

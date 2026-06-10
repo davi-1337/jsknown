@@ -5,9 +5,7 @@ use crate::{
     config::Config,
     fetcher::Fetcher,
     ingest::{AssetKind, IngestionRequest},
-    optimizer,
-    preanalysis,
-    sourcemap,
+    optimizer, preanalysis, sourcemap,
     storage::{AssetRecord, RelationshipRecord, Storage, content_hash},
 };
 use anyhow::Result;
@@ -98,20 +96,18 @@ impl Processor {
             }
 
             match serde_json::to_string_pretty(&pa) {
-                Ok(json) => {
-                    match self.storage.save_preanalysis_json(&url, &json).await {
-                        Ok(p) => {
-                            if let Err(e) = self.storage.append_preanalysis(&pa).await {
-                                tracing::debug!(%e, "failed to append preanalysis record");
-                            }
-                            Some(p.display().to_string())
+                Ok(json) => match self.storage.save_preanalysis_json(&url, &json).await {
+                    Ok(p) => {
+                        if let Err(e) = self.storage.append_preanalysis(&pa).await {
+                            tracing::debug!(%e, "failed to append preanalysis record");
                         }
-                        Err(e) => {
-                            tracing::debug!(%e, "failed to save preanalysis json");
-                            None
-                        }
+                        Some(p.display().to_string())
                     }
-                }
+                    Err(e) => {
+                        tracing::debug!(%e, "failed to save preanalysis json");
+                        None
+                    }
+                },
                 Err(e) => {
                     tracing::debug!(%e, "failed to serialize preanalysis");
                     None
@@ -222,7 +218,11 @@ impl Processor {
                 },
             };
 
-            if let Err(e) = self.storage.save_raw_sourcemap(&candidate.url, &map_content).await {
+            if let Err(e) = self
+                .storage
+                .save_raw_sourcemap(&candidate.url, &map_content)
+                .await
+            {
                 tracing::debug!(%e, "failed to save raw sourcemap");
                 continue;
             }
@@ -263,17 +263,11 @@ impl Processor {
                         })
                         .unwrap_or_else(|| "unknown.map".to_string());
 
-                    for (source_name, report) in
-                        sourcemap::format_per_file_reports(&decoded, &flat)
+                    for (source_name, report) in sourcemap::format_per_file_reports(&decoded, &flat)
                     {
                         if let Err(e) = self
                             .storage
-                            .save_sourcemap_per_file_report(
-                                &host,
-                                &map_slug,
-                                &source_name,
-                                &report,
-                            )
+                            .save_sourcemap_per_file_report(&host, &map_slug, &source_name, &report)
                             .await
                         {
                             tracing::debug!(%e, "failed to save per-file sourcemap report");
@@ -428,10 +422,11 @@ mod tests {
                 .join("case/optimized/example.com/static/app.js")
                 .exists()
         );
-        assert!(temp
-            .path()
-            .join("case/preanalysis/example.com/static")
-            .exists());
+        assert!(
+            temp.path()
+                .join("case/preanalysis/example.com/static")
+                .exists()
+        );
         assert!(
             temp.path()
                 .join("case/analysis/example.com/static/app.analysis.json")

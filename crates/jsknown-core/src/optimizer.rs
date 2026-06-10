@@ -69,7 +69,7 @@ pub struct OptimizationResult {
 
 static VOID_ZERO_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bvoid\s+0\b").unwrap());
 // Match !0 and !1 — no lookahead/lookbehind (not supported in Rust regex).
-// replace_outside_strings guards against string context; we do a char-check in the pass.
+// replace_bool_outside_strings guards against string context and char boundaries.
 static BOOL_TRUE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!0").unwrap());
 static BOOL_FALSE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!1").unwrap());
 
@@ -89,7 +89,11 @@ fn pass_boolean_literals(content: &str) -> (String, bool) {
 
 /// Specialized replacement for `!0`/`!1` that also checks char boundaries.
 fn replace_bool_outside_strings(content: &str, needle: &str, replacement: &str) -> (String, bool) {
-    let re = if needle == "!0" { &*BOOL_TRUE_RE } else { &*BOOL_FALSE_RE };
+    let re = if needle == "!0" {
+        &*BOOL_TRUE_RE
+    } else {
+        &*BOOL_FALSE_RE
+    };
     let chars: Vec<char> = content.chars().collect();
     let len = chars.len();
     let mut in_str_flags = vec![false; len];
@@ -114,7 +118,9 @@ fn replace_bool_outside_strings(content: &str, needle: &str, replacement: &str) 
                 in_str_flags[i] = true;
                 if ch == '\\' {
                     i += 1;
-                    if i < len { in_str_flags[i] = true; }
+                    if i < len {
+                        in_str_flags[i] = true;
+                    }
                 } else if q == '`' {
                     if ch == '$' && i + 1 < len && chars[i + 1] == '{' {
                         template_depth += 1;
@@ -258,12 +264,16 @@ fn fold_one_string_concat_pass(content: &str) -> (String, bool) {
 
             // Skip whitespace + '+'
             let mut k = after_first;
-            while k < len && (chars[k] == ' ' || chars[k] == '\t' || chars[k] == '\n' || chars[k] == '\r') {
+            while k < len
+                && (chars[k] == ' ' || chars[k] == '\t' || chars[k] == '\n' || chars[k] == '\r')
+            {
                 k += 1;
             }
             if k < len && chars[k] == '+' {
                 k += 1;
-                while k < len && (chars[k] == ' ' || chars[k] == '\t' || chars[k] == '\n' || chars[k] == '\r') {
+                while k < len
+                    && (chars[k] == ' ' || chars[k] == '\t' || chars[k] == '\n' || chars[k] == '\r')
+                {
                     k += 1;
                 }
                 // Must be followed by same-quote string
@@ -338,6 +348,7 @@ fn pass_ternary_annotate(content: &str) -> (String, bool) {
 // ── Pass runner ───────────────────────────────────────────────────────────────
 
 const MAX_OPTIMIZE_BYTES: usize = 5_000_000; // skip heavy passes above 5 MB
+type OptimizationPass = (&'static str, fn(&str) -> (String, bool));
 
 /// Run all optimization passes in order and return the combined result.
 pub fn optimize(content: &str) -> OptimizationResult {
@@ -346,7 +357,7 @@ pub fn optimize(content: &str) -> OptimizationResult {
 
     let run_heavy = content.len() <= MAX_OPTIMIZE_BYTES;
 
-    let passes: &[(&'static str, fn(&str) -> (String, bool))] = &[
+    let passes: &[OptimizationPass] = &[
         ("void_zero", pass_void_zero),
         ("boolean_literals", pass_boolean_literals),
         ("unicode_escape", pass_unicode_escape),
@@ -355,9 +366,7 @@ pub fn optimize(content: &str) -> OptimizationResult {
     ];
 
     for (name, pass_fn) in passes {
-        if !run_heavy
-            && matches!(*name, "unicode_escape" | "hex_escape" | "string_concat")
-        {
+        if !run_heavy && matches!(*name, "unicode_escape" | "hex_escape" | "string_concat") {
             continue;
         }
         let (next, changed) = pass_fn(&current);
@@ -564,11 +573,9 @@ pub(crate) fn detect_minifier(content: &str) -> Option<MinifierKind> {
 pub(crate) fn detect_obfuscation(content: &str) -> Vec<ObfuscationHint> {
     static HEX_PROP_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"\[["']\\x[0-9a-fA-F]{2}"#).unwrap());
-    static HEX_VAR_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"\b_0x[a-fA-F0-9]{3,}\b").unwrap());
-    static STR_ARRAY_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r#"var\s+_0x[a-fA-F0-9]+\s*=\s*\[['"]"#).unwrap()
-    });
+    static HEX_VAR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b_0x[a-fA-F0-9]{3,}\b").unwrap());
+    static STR_ARRAY_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"var\s+_0x[a-fA-F0-9]+\s*=\s*\[['"]"#).unwrap());
 
     let mut hints = Vec::new();
 
@@ -579,9 +586,7 @@ pub(crate) fn detect_obfuscation(content: &str) -> Vec<ObfuscationHint> {
         });
     }
 
-    if content.contains("arr.push(arr.shift())")
-        || content.contains(".push(.shift())")
-    {
+    if content.contains("arr.push(arr.shift())") || content.contains(".push(.shift())") {
         hints.push(ObfuscationHint {
             kind: ObfuscationKind::ArrayRotation,
             description: "Array rotation pattern (push/shift) detected — common in obfuscators"
@@ -616,8 +621,7 @@ pub(crate) fn extract_string_arrays(content: &str) -> Vec<StringArray> {
         )
         .unwrap()
     });
-    static QUOTED_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"["']([^"']*)["']"#).unwrap());
+    static QUOTED_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"["']([^"']*)["']"#).unwrap());
 
     let mut arrays = Vec::new();
 
@@ -675,25 +679,23 @@ fn decode_string_escapes(content: &str, kind: EscapeKind) -> (String, bool) {
         let ch = chars[i];
 
         match in_string {
-            None => {
-                match ch {
-                    '"' | '\'' => {
-                        in_string = Some(ch);
-                        out.push(ch);
-                        i += 1;
-                    }
-                    '`' => {
-                        in_string = Some('`');
-                        template_depth = 0;
-                        out.push(ch);
-                        i += 1;
-                    }
-                    _ => {
-                        out.push(ch);
-                        i += 1;
-                    }
+            None => match ch {
+                '"' | '\'' => {
+                    in_string = Some(ch);
+                    out.push(ch);
+                    i += 1;
                 }
-            }
+                '`' => {
+                    in_string = Some('`');
+                    template_depth = 0;
+                    out.push(ch);
+                    i += 1;
+                }
+                _ => {
+                    out.push(ch);
+                    i += 1;
+                }
+            },
 
             Some(q) => {
                 if ch == '\\' && i + 1 < len {
@@ -709,24 +711,26 @@ fn decode_string_escapes(content: &str, kind: EscapeKind) -> (String, bool) {
                                     end += 1;
                                 }
                                 let hex: String = chars[start..end].iter().collect();
-                                if let Some(cp) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                                    if cp.is_ascii_graphic() || cp == ' ' {
-                                        out.push(cp);
-                                        changed = true;
-                                        i = end + 1; // skip closing }
-                                        continue;
-                                    }
+                                if let Some(cp) =
+                                    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                                    && (cp.is_ascii_graphic() || cp == ' ')
+                                {
+                                    out.push(cp);
+                                    changed = true;
+                                    i = end + 1; // skip closing }
+                                    continue;
                                 }
                             } else if i + 5 < len {
                                 // \uXXXX
                                 let hex: String = chars[i + 2..i + 6].iter().collect();
-                                if let Some(cp) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                                    if cp.is_ascii_graphic() || cp == ' ' {
-                                        out.push(cp);
-                                        changed = true;
-                                        i += 6;
-                                        continue;
-                                    }
+                                if let Some(cp) =
+                                    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+                                    && (cp.is_ascii_graphic() || cp == ' ')
+                                {
+                                    out.push(cp);
+                                    changed = true;
+                                    i += 6;
+                                    continue;
                                 }
                             }
                             out.push(ch);
@@ -737,13 +741,13 @@ fn decode_string_escapes(content: &str, kind: EscapeKind) -> (String, bool) {
                         EscapeKind::Hex if next == 'x' && i + 3 < len => {
                             // \xXX
                             let hex: String = chars[i + 2..i + 4].iter().collect();
-                            if let Some(cp) = u8::from_str_radix(&hex, 16).ok().map(|b| b as char) {
-                                if cp.is_ascii_graphic() || cp == ' ' {
-                                    out.push(cp);
-                                    changed = true;
-                                    i += 4;
-                                    continue;
-                                }
+                            if let Some(cp) = u8::from_str_radix(&hex, 16).ok().map(|b| b as char)
+                                && (cp.is_ascii_graphic() || cp == ' ')
+                            {
+                                out.push(cp);
+                                changed = true;
+                                i += 4;
+                                continue;
                             }
                             out.push(ch);
                             out.push(next);
@@ -796,92 +800,6 @@ fn decode_string_escapes(content: &str, kind: EscapeKind) -> (String, bool) {
     (out, changed)
 }
 
-/// Apply a regex replacement only outside string/template literals.
-/// For simple boolean literal replacements this is good enough via string-FSM check.
-fn replace_outside_strings(content: &str, re: &Regex, replacement: &str) -> (String, bool) {
-    // Build a bitset of "inside string" positions (approximate, no comment awareness)
-    let chars: Vec<char> = content.chars().collect();
-    let len = chars.len();
-    let mut in_str = vec![false; len];
-    let mut i = 0;
-    let mut in_string: Option<char> = None;
-    let mut template_depth: i32 = 0;
-
-    let char_byte_offsets: Vec<usize> = content
-        .char_indices()
-        .map(|(b, _)| b)
-        .chain(std::iter::once(content.len()))
-        .collect();
-
-    while i < len {
-        let ch = chars[i];
-        match in_string {
-            None => {
-                if matches!(ch, '"' | '\'') {
-                    in_string = Some(ch);
-                    in_str[i] = true;
-                } else if ch == '`' {
-                    in_string = Some('`');
-                    template_depth = 0;
-                    in_str[i] = true;
-                }
-            }
-            Some(q) => {
-                in_str[i] = true;
-                if ch == '\\' {
-                    i += 1;
-                    if i < len {
-                        in_str[i] = true;
-                    }
-                } else if q == '`' {
-                    if ch == '$' && i + 1 < len && chars[i + 1] == '{' {
-                        template_depth += 1;
-                    } else if ch == '}' && template_depth > 0 {
-                        template_depth -= 1;
-                    } else if ch == '`' && template_depth == 0 {
-                        in_string = None;
-                    }
-                } else if ch == q {
-                    in_string = None;
-                }
-            }
-        }
-        i += 1;
-    }
-
-    let mut result = String::with_capacity(content.len());
-    let mut last_end = 0;
-    let mut changed = false;
-
-    for mat in re.find_iter(content) {
-        // Check if any char in this match is inside a string
-        let mat_start_byte = mat.start();
-        let mat_end_byte = mat.end();
-
-        // Find char index for mat_start_byte
-        let char_idx = char_byte_offsets
-            .partition_point(|&b| b < mat_start_byte);
-        let mat_char_len = content[mat_start_byte..mat_end_byte].chars().count();
-
-        let any_in_str = (char_idx..char_idx + mat_char_len)
-            .any(|ci| ci < in_str.len() && in_str[ci]);
-
-        if any_in_str {
-            result.push_str(&content[last_end..mat_end_byte]);
-            last_end = mat_end_byte;
-            continue;
-        }
-
-        result.push_str(&content[last_end..mat_start_byte]);
-        result.push_str(replacement);
-        last_end = mat_end_byte;
-        changed = true;
-    }
-
-    result.push_str(&content[last_end..]);
-    (result, changed)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -905,7 +823,9 @@ mod tests {
     #[test]
     fn unicode_escape_decoded() {
         let result = optimize(r#"var s = "\u0048ello";"#);
-        assert!(result.content.contains("Hello") || result.applied_passes.contains(&"unicode_escape"));
+        assert!(
+            result.content.contains("Hello") || result.applied_passes.contains(&"unicode_escape")
+        );
     }
 
     #[test]
@@ -917,7 +837,9 @@ mod tests {
     #[test]
     fn string_concat_folded() {
         let result = optimize(r#"var s = 'hel' + 'lo';"#);
-        assert!(result.content.contains("'hello'") || result.applied_passes.contains(&"string_concat"));
+        assert!(
+            result.content.contains("'hello'") || result.applied_passes.contains(&"string_concat")
+        );
     }
 
     #[test]
@@ -936,6 +858,10 @@ mod tests {
     fn detects_hex_var_obfuscation() {
         let content = "_0xab12 _0xcd34 _0xef56 _0x1234 _0x5678";
         let hints = detect_obfuscation(content);
-        assert!(hints.iter().any(|h| h.kind == ObfuscationKind::HexVariableNames));
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.kind == ObfuscationKind::HexVariableNames)
+        );
     }
 }

@@ -7,9 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
 // Handles //# sourceMappingURL=, //@ sourceMappingURL= (legacy), and /* sourceMappingURL= */
-static SOURCE_MAPPING_COMMENT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?://[#@]|/\*)\s*sourceMappingURL=([^\s*]+)"#).unwrap()
-});
+static SOURCE_MAPPING_COMMENT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?://[#@]|/\*)\s*sourceMappingURL=([^\s*]+)"#).unwrap());
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -236,8 +235,7 @@ pub fn reverse(content: &str) -> Result<Vec<ReversedSource>> {
 
 /// Fully decodes a source map JSON including VLQ mappings.
 pub fn decode(map_json: &str) -> Result<SourceMapDecoded> {
-    let raw: RawSourceMap =
-        serde_json::from_str(map_json).context("invalid source map JSON")?;
+    let raw: RawSourceMap = serde_json::from_str(map_json).context("invalid source map JSON")?;
 
     let mappings = parse_mappings(&raw.mappings);
 
@@ -266,9 +264,9 @@ pub fn build_flat_mappings(decoded: &SourceMapDecoded) -> Vec<MappingEntry> {
                 .get(src_idx as usize)
                 .cloned()
                 .unwrap_or_else(|| format!("<source {src_idx}>"));
-            let name = seg.names_idx.and_then(|ni| {
-                decoded.names.get(ni as usize).cloned()
-            });
+            let name = seg
+                .names_idx
+                .and_then(|ni| decoded.names.get(ni as usize).cloned());
 
             entries.push(MappingEntry {
                 generated_line: gen_line as u32,
@@ -294,7 +292,10 @@ pub fn format_per_file_reports(
     // Group entries by source file
     let mut by_file: BTreeMap<String, Vec<&MappingEntry>> = BTreeMap::new();
     for entry in flat {
-        by_file.entry(entry.source_file.clone()).or_default().push(entry);
+        by_file
+            .entry(entry.source_file.clone())
+            .or_default()
+            .push(entry);
     }
 
     let mut reports = BTreeMap::new();
@@ -340,7 +341,11 @@ pub fn format_combined_report(decoded: &SourceMapDecoded, flat: &[MappingEntry])
             .is_some();
         lines.push(format!(
             "  [{i:>3}] {src}{}",
-            if has_content { "  (has sourcesContent)" } else { "" }
+            if has_content {
+                "  (has sourcesContent)"
+            } else {
+                ""
+            }
         ));
     }
     lines.push(String::new());
@@ -432,9 +437,11 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        assert!(candidates
-            .iter()
-            .any(|c| c.url.contains("app.js.map") && !c.url.contains(".map.map")));
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.url.contains("app.js.map") && !c.url.contains(".map.map"))
+        );
     }
 
     #[test]

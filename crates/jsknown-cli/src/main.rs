@@ -38,6 +38,8 @@ struct ServeArgs {
     fetch_concurrency: usize,
     #[arg(long, default_value_t = 25_000_000)]
     max_body_bytes: usize,
+    #[arg(long)]
+    debug: bool,
 }
 
 impl From<ServeArgs> for Config {
@@ -52,18 +54,25 @@ impl From<ServeArgs> for Config {
             rate_per_minute: args.rate_per_minute,
             fetch_concurrency: args.fetch_concurrency,
             max_body_bytes: args.max_body_bytes,
+            debug: args.debug,
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
     match cli.command {
-        Commands::Serve(args) => jsknown_server::serve(args.into()).await,
+        Commands::Serve(args) => {
+            let config: Config = args.into();
+            let default_filter = if config.debug { "jsknown=debug,info" } else { "info" };
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+                )
+                .init();
+            jsknown_server::serve(config).await
+        }
     }
 }

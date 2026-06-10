@@ -21,22 +21,18 @@ static WEBPACK_STRING_RE: Lazy<Regex> =
 
 // ── New: Parcel ───────────────────────────────────────────────────────────────
 
-static PARCEL_REQUIRE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"parcelRequire\(["']([^"']+)["']\)"#).unwrap()
-});
-static PARCEL_EXPORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"\$parcel\$(?:require|export|interopDefault)\b"#).unwrap()
-});
+static PARCEL_REQUIRE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"parcelRequire\(["']([^"']+)["']\)"#).unwrap());
+static PARCEL_EXPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"\$parcel\$(?:require|export|interopDefault)\b"#).unwrap());
 // Parcel v2 bundle URL patterns
-static PARCEL_BUNDLE_URL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"["']([^"']*\.(?:js|mjs))["']"#).unwrap()
-});
+static PARCEL_BUNDLE_URL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"["']([^"']*\.(?:js|mjs))["']"#).unwrap());
 
 // ── New: Rollup ───────────────────────────────────────────────────────────────
 
-static ROLLUP_CHUNK_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"["']([^"']+\.[a-f0-9]{8}\.js)["']"#).unwrap()
-});
+static ROLLUP_CHUNK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"["']([^"']+\.[a-f0-9]{8}\.js)["']"#).unwrap());
 
 // ── New: esbuild ──────────────────────────────────────────────────────────────
 
@@ -48,10 +44,7 @@ static ESBUILD_CHUNK_RE: Lazy<Regex> = Lazy::new(|| {
 // ── New: Angular lazy routes ──────────────────────────────────────────────────
 
 static ANGULAR_LAZY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"loadChildren\s*:\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]([^'"]+)['"]\s*\)"#,
-    )
-    .unwrap()
+    Regex::new(r#"loadChildren\s*:\s*\(\s*\)\s*=>\s*import\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap()
 });
 static ANGULAR_LAZY_STRING_RE: Lazy<Regex> = Lazy::new(|| {
     // Older Angular: loadChildren: 'module/path#ModuleName'
@@ -73,17 +66,14 @@ static AMD_REQUIRE_RE: Lazy<Regex> =
 
 // ── New: SystemJS ─────────────────────────────────────────────────────────────
 
-static SYSTEMJS_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"System\.import\s*\(\s*['"]([^'"]+)['"]"#).unwrap()
-});
-static SYSTEMJS_REGISTER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"System\.register\s*\(\s*\[([^\]]+)\]"#).unwrap()
-});
+static SYSTEMJS_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"System\.import\s*\(\s*['"]([^'"]+)['"]"#).unwrap());
+static SYSTEMJS_REGISTER_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"System\.register\s*\(\s*\[([^\]]+)\]"#).unwrap());
 
 // ── Shared quoted-string extractor (for AMD/SystemJS arrays) ──────────────────
 
-static QUOTED_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"["']([^"']+)["']"#).unwrap());
+static QUOTED_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"["']([^"']+)["']"#).unwrap());
 
 fn extract_quoted_from_array(array_body: &str) -> Vec<String> {
     QUOTED_RE
@@ -123,10 +113,9 @@ pub fn discover(asset_url: &str, content: &str) -> Result<Vec<String>> {
             let value = &cap[1];
             if value.contains(".js")
                 && (value.contains("chunk") || value.contains("[id]") || value.contains("[name]"))
+                && let Some(url) = resolve(&base, value)
             {
-                if let Some(url) = resolve(&base, value) {
-                    out.insert(url);
-                }
+                out.insert(url);
             }
         }
     }
@@ -134,10 +123,10 @@ pub fn discover(asset_url: &str, content: &str) -> Result<Vec<String>> {
     // ── Existing: Next.js BUILD_MANIFEST ─────────────────────────────────────
     if content.contains("_next/static") || content.contains("__BUILD_MANIFEST") {
         for cap in WEBPACK_STRING_RE.captures_iter(content) {
-            if cap[1].contains("_next/static") {
-                if let Some(url) = resolve(&base, &cap[1]) {
-                    out.insert(url);
-                }
+            if cap[1].contains("_next/static")
+                && let Some(url) = resolve(&base, &cap[1])
+            {
+                out.insert(url);
             }
         }
     }
@@ -188,10 +177,10 @@ pub fn discover(asset_url: &str, content: &str) -> Result<Vec<String>> {
         .chain(SYSTEMJS_REGISTER_RE.captures_iter(content))
     {
         for quoted in extract_quoted_from_array(&cap[1]) {
-            if quoted.ends_with(".js") || quoted.ends_with(".mjs") {
-                if let Some(url) = resolve(&base, &quoted) {
-                    out.insert(url);
-                }
+            if (quoted.ends_with(".js") || quoted.ends_with(".mjs"))
+                && let Some(url) = resolve(&base, &quoted)
+            {
+                out.insert(url);
             }
         }
     }
@@ -207,10 +196,11 @@ pub fn discover(asset_url: &str, content: &str) -> Result<Vec<String>> {
     if PARCEL_EXPORT_RE.is_match(content) {
         for cap in PARCEL_BUNDLE_URL_RE.captures_iter(content) {
             let v = &cap[1];
-            if !v.contains("node_modules") && !v.starts_with("data:") {
-                if let Some(url) = resolve(&base, v) {
-                    out.insert(url);
-                }
+            if !v.contains("node_modules")
+                && !v.starts_with("data:")
+                && let Some(url) = resolve(&base, v)
+            {
+                out.insert(url);
             }
         }
     }
@@ -257,9 +247,7 @@ mod tests {
             r#"import('./components/Lazy.js')"#,
         )
         .unwrap();
-        assert!(chunks
-            .iter()
-            .any(|c| c.contains("components/Lazy.js")));
+        assert!(chunks.iter().any(|c| c.contains("components/Lazy.js")));
     }
 
     #[test]

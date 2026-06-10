@@ -9,26 +9,22 @@ use serde::Serialize;
 
 static FN_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bfunction[\s*({]|=>\s*[{(]|\)\s*=>").unwrap());
-static CLASS_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\bclass\s+[A-Z][A-Za-z0-9_$]*").unwrap());
-static IMPORT_STMT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^\s*import\s").unwrap());
-static EXPORT_STMT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^\s*export\s").unwrap());
-static DYNAMIC_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\bimport\s*\(").unwrap());
-static AMD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\bdefine\s*\(\s*\[").unwrap());
-static CJS_REQUIRE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\brequire\s*\(").unwrap());
-static ESM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^\s*(?:import|export)\s").unwrap());
+static CLASS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bclass\s+[A-Z][A-Za-z0-9_$]*").unwrap());
+static IMPORT_STMT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*import\s").unwrap());
+static EXPORT_STMT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*export\s").unwrap());
+static DYNAMIC_IMPORT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bimport\s*\(").unwrap());
+static AMD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bdefine\s*\(\s*\[").unwrap());
+static CJS_REQUIRE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\brequire\s*\(").unwrap());
+static ESM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*(?:import|export)\s").unwrap());
 static SRCMAP_HINT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?://[#@]|/\*)\s*sourceMappingURL=(\S+)").unwrap());
 
 const LAZY_PATTERNS: &[(&str, &str)] = &[
     ("react-lazy", r"React\.lazy\s*\("),
-    ("dynamic-import-string", r#"import\s*\(\s*['"][^'"]+['"]\s*\)"#),
+    (
+        "dynamic-import-string",
+        r#"import\s*\(\s*['"][^'"]+['"]\s*\)"#,
+    ),
     ("require-ensure", r"require\.ensure\s*\("),
     ("vue-async", r"defineAsyncComponent\s*\("),
     ("angular-loadchildren", r"loadChildren\s*:"),
@@ -70,8 +66,7 @@ pub fn preanalyze(url: &str, content: &str) -> PreAnalysis {
     let size_bytes = content.len();
     let line_count = content.lines().count().max(1);
     let avg_line_length = size_bytes as f64 / line_count as f64;
-    let likely_minified =
-        avg_line_length > 200.0 || (line_count <= 5 && size_bytes > 5_000);
+    let likely_minified = avg_line_length > 200.0 || (line_count <= 5 && size_bytes > 5_000);
 
     let function_count = FN_RE.find_iter(content).count();
     let class_count = CLASS_RE.find_iter(content).count();
@@ -96,9 +91,7 @@ pub fn preanalyze(url: &str, content: &str) -> PreAnalysis {
     }
     let has_lazy_loading = !lazy_patterns_found.is_empty();
 
-    let sourcemap_url_hint = SRCMAP_HINT_RE
-        .captures(content)
-        .map(|c| c[1].to_string());
+    let sourcemap_url_hint = SRCMAP_HINT_RE.captures(content).map(|c| c[1].to_string());
     let has_sourcemap_comment = sourcemap_url_hint.is_some();
 
     let bundler = detect_bundler(content);
