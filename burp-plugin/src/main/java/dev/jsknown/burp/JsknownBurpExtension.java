@@ -7,7 +7,7 @@ import burp.api.montoya.http.handler.HttpRequestToBeSent;
 import burp.api.montoya.http.handler.HttpResponseReceived;
 import burp.api.montoya.http.handler.RequestToBeSentAction;
 import burp.api.montoya.http.handler.ResponseReceivedAction;
-import burp.api.montoya.http.message.HttpRequestResponse;
+import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
 
 import javax.swing.JButton;
@@ -20,7 +20,6 @@ import java.awt.GridLayout;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -56,8 +55,8 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
 
-        HttpRequestResponse requestResponse = responseReceived.initiatingRequest().requestResponse();
-        String url = requestResponse.request().url();
+        HttpRequest capturedRequest = responseReceived.initiatingRequest();
+        String url = capturedRequest.url();
         if (scopeOnly.isSelected() && !api.scope().isInScope(url)) {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
@@ -69,7 +68,7 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
         }
 
         try {
-            postIngest(requestResponse, response);
+            postIngest(capturedRequest, response);
         } catch (Exception error) {
             api.logging().logToError("jsknown ingest failed: " + error.getMessage());
         }
@@ -94,7 +93,7 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
 
     private void testConnection() {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
                 .uri(URI.create(serverUrl.getText() + "/health"))
                 .timeout(Duration.ofSeconds(3))
                 .GET()
@@ -106,13 +105,13 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
         }
     }
 
-    private void postIngest(HttpRequestResponse requestResponse, HttpResponse response) throws IOException, InterruptedException {
-        String json = JsonPayload.from(requestResponse, response);
-        HttpRequest request = HttpRequest.newBuilder()
+    private void postIngest(HttpRequest capturedRequest, HttpResponse response) throws IOException, InterruptedException {
+        String json = JsonPayload.from(capturedRequest, response);
+        java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
             .uri(URI.create(serverUrl.getText() + "/ingest"))
             .timeout(Duration.ofSeconds(5))
             .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
+            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
             .build();
         client.send(request, BodyHandlers.discarding());
     }
@@ -130,16 +129,16 @@ public final class JsknownBurpExtension implements BurpExtension, HttpHandler {
     }
 
     private static final class JsonPayload {
-        static String from(HttpRequestResponse requestResponse, HttpResponse response) {
+        static String from(HttpRequest capturedRequest, HttpResponse response) {
             Map<String, String> requestHeaders = new LinkedHashMap<>();
-            requestResponse.request().headers().forEach(header -> requestHeaders.put(header.name(), header.value()));
+            capturedRequest.headers().forEach(header -> requestHeaders.put(header.name(), header.value()));
             Map<String, String> responseHeaders = new LinkedHashMap<>();
             response.headers().forEach(header -> responseHeaders.put(header.name(), header.value()));
 
             return "{"
                 + "\"request\":{"
-                + "\"method\":" + quote(requestResponse.request().method()) + ","
-                + "\"url\":" + quote(requestResponse.request().url()) + ","
+                + "\"method\":" + quote(capturedRequest.method()) + ","
+                + "\"url\":" + quote(capturedRequest.url()) + ","
                 + "\"headers\":" + map(requestHeaders)
                 + "},"
                 + "\"response\":{"
