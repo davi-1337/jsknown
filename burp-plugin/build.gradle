@@ -1,0 +1,35 @@
+plugins {
+    id "java"
+}
+
+group = "dev.jsknown"
+version = "0.1.0"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    compileOnly "net.portswigger.burp.extensions:montoya-api:2025.5"
+    testImplementation "org.junit.jupiter:junit-jupiter:5.10.3"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+}
+
+tasks.jar {
+    archiveFileName = "jsknown-burp.jar"
+    manifest {
+        attributes(
+            "Implementation-Title": "jsknown Burp Suite Extension",
+            "Implementation-Version": project.version
+        )
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
