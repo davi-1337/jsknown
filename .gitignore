@@ -1,0 +1,7 @@
+/target/
+/.idea/
+/.vscode/
+*.log
+*.tmp
+burp-plugin/build/
+burp-plugin/.gradle/
