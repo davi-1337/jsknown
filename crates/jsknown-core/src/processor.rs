@@ -5,6 +5,8 @@ use crate::{
     config::Config,
     fetcher::Fetcher,
     ingest::{AssetKind, IngestionRequest},
+    optimizer,
+    preanalysis,
     sourcemap,
     storage::{AssetRecord, RelationshipRecord, Storage, content_hash},
 };
@@ -70,7 +72,10 @@ impl Processor {
         parent_url: Option<String>,
         discovered_by: Option<String>,
     ) -> Result<()> {
+        // ── 1. Save original ──────────────────────────────────────────────────
         let original_path = self.storage.save_original(&url, kind, &content).await?;
+
+        // ── 2. Beautify ───────────────────────────────────────────────────────
         let beautified_path = if matches!(kind, AssetKind::Html | AssetKind::JavaScript) {
             Some(
                 self.storage
@@ -81,6 +86,65 @@ impl Processor {
             None
         };
 
+        // ── 3. Pre-analysis (fast, synchronous, no I/O itself) ────────────────
+        let preanalysis_path = if matches!(kind, AssetKind::JavaScript) {
+            let pa = preanalysis::preanalyze(&url, &content);
+
+            if let Some(ref fw) = pa.framework {
+                tracing::debug!(url=%url, framework=?fw, "framework detected");
+            }
+            if let Some(ref bundler) = pa.bundler {
+                tracing::debug!(url=%url, bundler=?bundler, "bundler detected");
+            }
+
+            match serde_json::to_string_pretty(&pa) {
+                Ok(json) => {
+                    match self.storage.save_preanalysis_json(&url, &json).await {
+                        Ok(p) => {
+                            if let Err(e) = self.storage.append_preanalysis(&pa).await {
+                                tracing::debug!(%e, "failed to append preanalysis record");
+                            }
+                            Some(p.display().to_string())
+                        }
+                        Err(e) => {
+                            tracing::debug!(%e, "failed to save preanalysis json");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(%e, "failed to serialize preanalysis");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // ── 4. Optimize ───────────────────────────────────────────────────────
+        let optimized_path = if matches!(kind, AssetKind::JavaScript) {
+            let result = optimizer::optimize(&content);
+
+            if !result.obfuscation_hints.is_empty() {
+                tracing::debug!(
+                    url=%url,
+                    hints=%result.obfuscation_hints.len(),
+                    "obfuscation hints found"
+                );
+            }
+
+            match self.storage.save_optimized(&url, &result.content).await {
+                Ok(p) => Some(p.display().to_string()),
+                Err(e) => {
+                    tracing::debug!(%e, "failed to save optimized js");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // ── 5. Append asset record ────────────────────────────────────────────
         self.storage
             .append_asset(&AssetRecord {
                 url: url.clone(),
@@ -91,9 +155,12 @@ impl Processor {
                 parent_url: parent_url.clone(),
                 discovered_by,
                 headers: headers.clone(),
+                optimized_path,
+                preanalysis_path,
             })
             .await?;
 
+        // ── 6. Relationship ───────────────────────────────────────────────────
         if let Some(parent_url) = parent_url {
             self.storage
                 .append_relationship(&RelationshipRecord {
@@ -104,14 +171,17 @@ impl Processor {
                 .await?;
         }
 
+        // ── 7. Static analysis ────────────────────────────────────────────────
         if matches!(kind, AssetKind::JavaScript) {
             self.analyze(&url, &content).await?;
         }
 
+        // ── 8. Source maps (with VLQ reports) ────────────────────────────────
         if matches!(kind, AssetKind::Html | AssetKind::JavaScript) {
             self.process_sourcemaps(&url, &content, &headers).await?;
         }
 
+        // ── 9. Chunk discovery ────────────────────────────────────────────────
         if matches!(kind, AssetKind::Html | AssetKind::JavaScript) {
             self.process_chunks(&url, &content, &headers).await?;
         }
@@ -142,22 +212,93 @@ impl Processor {
                     Ok(Some(content)) => content,
                     Ok(None) => continue,
                     Err(error) => {
-                        tracing::debug!(%error, sourcemap_url = %candidate.url, "failed to fetch source map");
+                        tracing::debug!(
+                            %error,
+                            sourcemap_url = %candidate.url,
+                            "failed to fetch source map"
+                        );
                         continue;
                     }
                 },
             };
-            self.storage
-                .save_raw_sourcemap(&candidate.url, &map_content)
-                .await?;
+
+            if let Err(e) = self.storage.save_raw_sourcemap(&candidate.url, &map_content).await {
+                tracing::debug!(%e, "failed to save raw sourcemap");
+                continue;
+            }
+
             let host = Url::parse(asset_url)
                 .ok()
                 .and_then(|url| url.host_str().map(ToString::to_string))
                 .unwrap_or_else(|| "unknown".to_string());
-            for source in sourcemap::reverse(&map_content)? {
-                self.storage
-                    .save_reversed_source(&host, &source.name, &source.content)
-                    .await?;
+
+            // Fast path: recover sourcesContent (no VLQ required)
+            match sourcemap::reverse(&map_content) {
+                Ok(sources) => {
+                    for source in sources {
+                        if let Err(e) = self
+                            .storage
+                            .save_reversed_source(&host, &source.name, &source.content)
+                            .await
+                        {
+                            tracing::debug!(%e, source=%source.name, "failed to save reversed source");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(%e, "failed to reverse sourcemap");
+                }
+            }
+
+            // Full VLQ decode + per-file + combined reports (best-effort)
+            match sourcemap::decode(&map_content) {
+                Ok(decoded) => {
+                    let flat = sourcemap::build_flat_mappings(&decoded);
+
+                    let map_slug = Url::parse(&candidate.url)
+                        .ok()
+                        .and_then(|u| {
+                            u.path_segments()
+                                .and_then(|mut s| s.next_back().map(String::from))
+                        })
+                        .unwrap_or_else(|| "unknown.map".to_string());
+
+                    for (source_name, report) in
+                        sourcemap::format_per_file_reports(&decoded, &flat)
+                    {
+                        if let Err(e) = self
+                            .storage
+                            .save_sourcemap_per_file_report(
+                                &host,
+                                &map_slug,
+                                &source_name,
+                                &report,
+                            )
+                            .await
+                        {
+                            tracing::debug!(%e, "failed to save per-file sourcemap report");
+                        }
+                    }
+
+                    let combined = sourcemap::format_combined_report(&decoded, &flat);
+                    if let Err(e) = self
+                        .storage
+                        .save_sourcemap_combined_report(&candidate.url, &combined)
+                        .await
+                    {
+                        tracing::debug!(%e, "failed to save combined sourcemap report");
+                    }
+
+                    tracing::debug!(
+                        map_url=%candidate.url,
+                        sources=%decoded.sources.len(),
+                        mappings=%flat.len(),
+                        "VLQ sourcemap decoded"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(%e, map_url=%candidate.url, "VLQ decode failed, skipping reports");
+                }
             }
         }
         Ok(())
@@ -284,9 +425,19 @@ mod tests {
         );
         assert!(
             temp.path()
+                .join("case/optimized/example.com/static/app.js")
+                .exists()
+        );
+        assert!(temp
+            .path()
+            .join("case/preanalysis/example.com/static")
+            .exists());
+        assert!(
+            temp.path()
                 .join("case/analysis/example.com/static/app.analysis.json")
                 .exists()
         );
         assert!(temp.path().join("case/metadata/findings.jsonl").exists());
+        assert!(temp.path().join("case/metadata/preanalysis.jsonl").exists());
     }
 }

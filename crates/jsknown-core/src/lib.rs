@@ -4,6 +4,8 @@ pub mod chunks;
 pub mod config;
 pub mod fetcher;
 pub mod ingest;
+pub mod optimizer;
+pub mod preanalysis;
 pub mod processor;
 pub mod sourcemap;
 pub mod storage;

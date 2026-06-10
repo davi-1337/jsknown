@@ -22,11 +22,18 @@ pub struct AssetRecord {
     pub url: String,
     pub kind: AssetKind,
     pub original_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub beautified_path: Option<String>,
     pub sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub discovered_by: Option<String>,
     pub headers: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optimized_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preanalysis_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,8 +48,12 @@ impl Storage {
         for dir in [
             "original",
             "beautified",
+            "optimized",
+            "preanalysis",
             "sourcemaps/raw",
             "sourcemaps/reversed",
+            "sourcemaps/reports/per-file",
+            "sourcemaps/reports/combined",
             "analysis",
             "metadata",
         ] {
@@ -77,6 +88,24 @@ impl Storage {
         Ok(path)
     }
 
+    pub async fn save_optimized(&self, url: &str, content: &str) -> Result<PathBuf> {
+        let path = self.url_to_path("optimized", url, AssetKind::JavaScript)?;
+        write_file(&path, content).await?;
+        Ok(path)
+    }
+
+    pub async fn save_preanalysis_json(&self, url: &str, content: &str) -> Result<PathBuf> {
+        let mut path = self.url_to_path("preanalysis", url, AssetKind::JavaScript)?;
+        // Replace or add .preanalysis.json extension
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "asset".to_string());
+        path.set_file_name(format!("{stem}.preanalysis.json"));
+        write_file(&path, content).await?;
+        Ok(path)
+    }
+
     pub async fn save_raw_sourcemap(&self, url: &str, content: &str) -> Result<PathBuf> {
         let path = self.url_to_path("sourcemaps/raw", url, AssetKind::SourceMap)?;
         write_file(&path, content).await?;
@@ -101,6 +130,50 @@ impl Storage {
         Ok(path)
     }
 
+    /// Saves a per-source-file VLQ mapping report under sourcemaps/reports/per-file/.
+    pub async fn save_sourcemap_per_file_report(
+        &self,
+        host: &str,
+        map_slug: &str,
+        source_name: &str,
+        content: &str,
+    ) -> Result<PathBuf> {
+        let mut path = self
+            .root
+            .join("sourcemaps/reports/per-file")
+            .join(sanitize_segment(host))
+            .join(sanitize_segment(map_slug));
+        for part in sanitize_source_path(source_name) {
+            path.push(part);
+        }
+        // Ensure it ends with .mapping.txt
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "source".to_string());
+        path.set_file_name(format!("{name}.mapping.txt"));
+        ensure_inside(&self.root, &path)?;
+        write_file(&path, content).await?;
+        Ok(path)
+    }
+
+    /// Saves the combined cross-source VLQ report under sourcemaps/reports/combined/.
+    pub async fn save_sourcemap_combined_report(
+        &self,
+        map_url: &str,
+        content: &str,
+    ) -> Result<PathBuf> {
+        let mut path =
+            self.url_to_path("sourcemaps/reports/combined", map_url, AssetKind::SourceMap)?;
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "map".to_string());
+        path.set_file_name(format!("{stem}.combined.txt"));
+        write_file(&path, content).await?;
+        Ok(path)
+    }
+
     pub async fn save_analysis(&self, url: &str, content: &str) -> Result<PathBuf> {
         let mut path = self.url_to_path("analysis", url, AssetKind::JavaScript)?;
         path.set_extension("analysis.json");
@@ -118,6 +191,10 @@ impl Storage {
 
     pub async fn append_finding<T: Serialize>(&self, finding: &T) -> Result<()> {
         self.append_jsonl("findings.jsonl", finding).await
+    }
+
+    pub async fn append_preanalysis<T: Serialize>(&self, record: &T) -> Result<()> {
+        self.append_jsonl("preanalysis.jsonl", record).await
     }
 
     async fn append_jsonl<T: Serialize>(&self, file: &str, value: &T) -> Result<()> {
@@ -189,7 +266,7 @@ async fn write_file(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn sanitize_segment(input: &str) -> String {
+pub(crate) fn sanitize_segment(input: &str) -> String {
     let mut out = String::new();
     for ch in input.chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '(' | ')') {
@@ -206,7 +283,7 @@ fn sanitize_segment(input: &str) -> String {
     }
 }
 
-fn sanitize_source_path(input: &str) -> Vec<String> {
+pub(crate) fn sanitize_source_path(input: &str) -> Vec<String> {
     input
         .replace('\\', "/")
         .split('/')
@@ -259,5 +336,15 @@ mod tests {
             path.to_string_lossy()
                 .contains("example.com/assets/app.js__q_")
         );
+    }
+
+    #[tokio::test]
+    async fn creates_new_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        Storage::new(temp.path().to_path_buf()).await.unwrap();
+        assert!(temp.path().join("optimized").exists());
+        assert!(temp.path().join("preanalysis").exists());
+        assert!(temp.path().join("sourcemaps/reports/per-file").exists());
+        assert!(temp.path().join("sourcemaps/reports/combined").exists());
     }
 }
